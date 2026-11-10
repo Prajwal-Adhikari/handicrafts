@@ -1,0 +1,55 @@
+import makeWASocket, {
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+} from "@whiskeysockets/baileys";
+import { Boom } from "@hapi/boom";
+import qrcode from "qrcode-terminal";
+
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
+  const { version, isLatest } = await fetchLatestBaileysVersion();
+  console.log(`Using WA version ${version.join(".")}, isLatest: ${isLatest}`);
+  const sock = makeWASocket({
+    version,
+    auth: state,
+  });
+
+  sock.ev.on("connection.update", (update) => {
+    const { connection, lastDisconnect, qr } = update;
+    if (qr) {
+      qrcode.generate(qr, { small: true });
+    }
+    if (connection === "close") {
+      const shouldReconnect =
+        (lastDisconnect?.error as Boom)?.output?.statusCode !==
+        DisconnectReason.loggedOut;
+      console.log(
+        "connection closed due to",
+        lastDisconnect?.error,
+        ", reconnecting:",
+        shouldReconnect,
+      );
+      if (shouldReconnect) {
+        connectToWhatsApp();
+      }
+    } else if (connection === "open") {
+      console.log("opened connection");
+    }
+  });
+
+  sock.ev.on("messages.upsert", async (event) => {
+    if (event.type != "notify") return;
+    for (const m of event.messages) {
+      if (m.key.fromMe) continue;
+      console.log(JSON.stringify(m, undefined, 2));
+
+      console.log("replying to ", m.key.remoteJid);
+      await sock.sendMessage(m.key.remoteJid!, { text: "Hello from Bailey!" });
+    }
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+}
+
+connectToWhatsApp();
